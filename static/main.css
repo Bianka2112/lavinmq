@@ -2156,9 +2156,24 @@ pre.arguments .inactive-argument:before {
   float: right;
 }
 
+#log-loading[hidden] { 
+  display: none; 
+}
+
+#log-loading {
+  padding: .5rem .75rem;
+  font-size: 0.95em;
+  border-bottom: 1px solid rgba(0,0,0,.08);
+  background: var(--color-bg-secondary);
+  display: flex;
+  justify-content: center;
+  z-index: 5;
+}
+
 #livelog {
-  max-height: 85vh;
+  max-height: 65vh;
   overflow: auto;
+  overflow-anchor: none;
   scrollbar-gutter: stable both-edges;
   scroll-behavior: auto;
 }

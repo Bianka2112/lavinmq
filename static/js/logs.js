@@ -4,14 +4,23 @@ const tbody = document.getElementById('livelog-body')
 const filterInput = document.getElementById('log-filter')
 const btnToTop = document.getElementById('to-top')
 const btnToBottom = document.getElementById('to-bottom')
+const loading = document.getElementById('log-loading')
+
 const allLogs = []
 const pendingLogs = []
+
 const MAX_ROWS = 2000
-const INITIAL_ROWS = 500
-const ROWS_PER_FRAME = 250
+const INITIAL_ROWS = 1000
+const ROWS_PER_FRAME = 150
+const BOOT_MIN_LOGS = INITIAL_ROWS
+const BOOT_MAX = 25000
+
 let isFrameQueued = false
 let shouldAutoScroll = true
 let currentRegex = null
+let booting = true
+let bootTime = performance.now()
+let paintCount = 0
 
 // SSE
 evtSource.onmessage = (event) => {
@@ -19,6 +28,10 @@ evtSource.onmessage = (event) => {
   const [severity, source, message] = JSON.parse(event.data)
   const log = { timestamp, severity, source, message }
   pendingLogs.push(log)
+  if (booting) {
+    loading.hidden = false
+    tbody.style.visibility = 'hidden'
+  }
   requestPaint()
 }
 
@@ -56,15 +69,69 @@ const buildRow = (log) => {
   return tr
 }
 
+// Request Animation Frame
+const requestPaint = () => {
+  if (isFrameQueued) return
+  isFrameQueued = true
+  requestAnimationFrame(() => {
+    isFrameQueued = false
+    paintIncoming()
+  })
+}
+
 // DocumentFragment = save logs off-DOM, render to DOM as directed. Use rAF for smooth updates, batch rendering large logs
 const paintIncoming = () => {
-  const domPaint = Math.min(
-    (tbody.rows.length === 0 ? INITIAL_ROWS : ROWS_PER_FRAME),
-    pendingLogs.length
-  )
-  if (domPaint === 0) return
+  console.debug('booting', booting, 'pending', pendingLogs.length, 'tbodyRows', tbody.rows.length)
+  
+  const hadRows = tbody.rows.length > 0
+  const now = performance.now()
 
-  const batch = pendingLogs.splice(0, domPaint)
+  if (booting) {
+    const minLogs = pendingLogs.length >= BOOT_MIN_LOGS
+    const minWait = (now - bootTime) >= BOOT_MAX
+
+    if (!minLogs && !minWait) {
+      requestPaint()
+      return
+    }
+
+    const initPaint = Math.min(pendingLogs.length, INITIAL_ROWS, MAX_ROWS)
+    
+    if (initPaint === 0) {
+      requestPaint() 
+      return
+    }
+
+    // Build off-DOM
+    const batch = pendingLogs.splice(0, initPaint)
+
+    const frag = document.createDocumentFragment()
+    for (const log of batch) {
+      allLogs.push(log)
+      if (allLogs.length > MAX_ROWS) allLogs.shift()
+      if (matches(log)) frag.appendChild(buildRow(log))
+    }
+
+    if (!hadRows) tbody.textContent = ''
+    if (frag.childNodes.length) tbody.appendChild(frag)
+    
+    while (tbody.rows.length > MAX_ROWS) tbody.deleteRow(0)
+
+    tbody.style.visibility = 'visible'
+    loading.hidden = true
+    booting = false
+
+    livelog.scrollTop = livelog.scrollHeight
+      
+    if (pendingLogs.length) 
+      requestPaint()
+      return
+  } 
+  // NORMAL PHASE: small batches regularly (append-only)
+  const repaint = Math.min(ROWS_PER_FRAME, pendingLogs.length)
+  if (repaint === 0) return
+
+  const batch = pendingLogs.splice(0, repaint)
 
   const frag = document.createDocumentFragment()
   for (const log of batch) {
@@ -74,20 +141,14 @@ const paintIncoming = () => {
   }
 
   if (frag.childNodes.length) tbody.appendChild(frag)
-  
+
   while (tbody.rows.length > MAX_ROWS) tbody.deleteRow(0)
 
-  if (pendingLogs.length) requestPaint()
-}
+  livelog.scrollTop = livelog.scrollHeight  
 
-// Request Animation Frame
-const requestPaint = () => {
-  if (isFrameQueued) return
-  isFrameQueued = true
-  requestAnimationFrame(() => {
-    isFrameQueued = false
-    paintIncoming()
-  })
+  if (pendingLogs.length) {
+    requestPaint()
+  }
 }
 
 // Helpers
@@ -167,18 +228,18 @@ livelog.addEventListener('scroll', event => {
   lastScrollTop = st <= 0 ? 0 : st
 })
 
-// Add 1000 fake logs quickly to test batching:
-let n = 0
-const fake = setInterval(() => {
-  const log = {
-    timestamp: new Date(),
-    severity: ['INFO','WARN','ERROR'][Math.floor(Math.random()*3)],
-    source: 'dev',
-    message: 'test #' + (++n)
-  }
-  pendingLogs.push(log)
-  requestPaint()
-  if (n >= 1000) clearInterval(fake)
-}, 2)
+// // Add 1000 fake logs quickly to test batching:
+// let n = 0
+// const fake = setInterval(() => {
+//   const log = {
+//     timestamp: new Date(),
+//     severity: ['INFO','WARN','ERROR'][Math.floor(Math.random()*3)],
+//     source: 'dev',
+//     message: 'test #' + (++n)
+//   }
+//   pendingLogs.push(log)
+//   requestPaint()
+//   if (n >= 1000) clearInterval(fake)
+// }, 2)
 
 window.addEventListener('beforeunload', () => evtSource.close())
